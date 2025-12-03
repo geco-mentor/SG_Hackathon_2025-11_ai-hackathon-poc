@@ -1,0 +1,1354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    <title>Operations Dashboard</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f1f5f9; }
+        .loading-screen { display:flex; flex-direction:column; justify-content:center; align-items:center; min-height:70vh; font-size:1.25rem; color:#475569; }
+        .data-source { font-size:0.75rem; color:#94a3b8; margin-top:4px; }
+
+    /* Centered modal styles */
+    #modal-backdrop.hidden,
+    #stockout-modal.hidden {
+        display: none;
+    }
+        #map { height: 360px; width: 100%; border-radius: 8px; }
+        .marker-hover { cursor: pointer; }
+        /* table striping */
+        .restock-table tbody tr:nth-child(odd) { background: #fffaf0; }
+
+    /* Maximize state */
+    .modal-maximized {
+        width: 95% !important;
+        height: 95% !important;
+    }
+
+    /* small style for numbered route labels */
+    .route-label {
+      display: inline-block;
+      transform: translate(-50%, -50%);
+    }
+
+    /* Increase popup modal table font size by 2 levels */
+    #stockout-modal table,
+    #stockout-modal table td,
+    #stockout-modal table th {
+        font-size: 16px !important; /* Tailwind text-base */
+    }
+
+    /* small style for numbered route labels */
+    .route-label div { line-height: 1; text-align:center; }
+
+    </style>
+
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'primary-dark': '#0f172a',
+                        'accent-sky': '#0ea5e9',
+                    }
+                }
+            }
+        };
+    </script>
+
+<style>
+.modal-window { max-width: 800px; width: 80%; max-height: 600px; }
+.modal-window.maximized { transform: scale(1.3); max-width: 1200px; max-height: 900px; }
+</style>
+</head>
+<body class="p-4 sm:p-6 lg:p-8">
+
+    <div class="max-w-7xl mx-auto space-y-8">
+        <header class="bg-white p-6 rounded-xl shadow-lg border-b-4 border-primary-dark">
+            <h1 class="text-3xl font-extrabold text-primary-dark mb-2">Inventory & Demand Analytics</h1>
+            <h2 class="text-xl font-medium text-slate-600">Supply Chain Performance Dashboard</h2>
+        </header>
+
+        <div id="content-area">
+            <div class="loading-screen" id="loading-indicator">
+                <svg class="animate-spin -ml-1 mr-3 h-8 w-8 text-indigo-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <p class="mt-4">Generating and processing data...</p>
+            </div>
+        </div>
+    </div>
+
+    <div id="drawer-backdrop" class="drawer-backdrop" aria-hidden="true"></div>
+
+    <div id="modal-backdrop" class="fixed inset-0 bg-black/50 z-[40] hidden"></div>
+
+    <div id="stockout-modal"
+         class="fixed inset-0 z-[50] flex items-center justify-center hidden">
+
+        <div class="bg-white rounded-xl shadow-2xl w-[80%] h-[85%] max-w-[1100px] flex flex-col border border-slate-300">
+
+            <div class="flex items-center justify-between p-4 border-b">
+                <div>
+                    <h3 class="text-lg font-semibold text-primary-dark">
+                        Critical Stockouts — Outlet Map
+                    </h3>
+                    <p class="text-sm text-slate-500">Hover a marker to view SKU restock details</p>
+                </div>
+
+            <button id="toggle-size"
+                    class="p-2 rounded bg-slate-100 hover:bg-slate-200"
+                    title="Maximize / Restore">
+                <svg id="toggle-icon" class="w-5 h-5 text-slate-600"
+                     fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M4 8V4h4M4 4l6 6M20 16v4h-4m4 4l-6-6"/>
+                </svg>
+            </button>
+
+                <button id="close-modal"
+                        class="p-2 rounded bg-slate-100 hover:bg-slate-200">
+                    <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                              d="M6 18L18 6M6 6l12 12"/>
+                    </svg>
+                </button>
+            </div>
+
+            <div class="p-4 overflow-y-auto flex-1 space-y-4">
+
+                <div class="flex items-center justify-between mb-3">
+      <div class="flex items-center gap-2">
+        <button id="optimize-route-btn" class="px-3 py-1 rounded bg-indigo-600 text-white text-sm hover:bg-indigo-700">
+          Optimize Route
+        </button>
+        <button id="clear-route-btn" class="px-3 py-1 rounded bg-slate-100 text-slate-700 text-sm hover:bg-slate-200">
+          Clear Route
+        </button>
+      </div>
+      <div class="text-xs text-slate-500">Start: Warehouse (1.3576, 103.8935)</div>
+    </div>
+
+    <div class="bg-white border rounded-lg p-3 shadow-sm mb-2">
+      <h5 class="text-sm font-medium text-slate-700 mb-2">Route Stops (optimized order)</h5>
+      <div class="overflow-auto max-h-28">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-slate-600 text-xs">
+              <th class="py-1 px-2">#</th>
+              <th class="py-1 px-2">Outlet ID</th>
+              <th class="py-1 px-2">Lat</th>
+              <th class="py-1 px-2">Lng</th>
+              <th class="py-1 px-2">Dist from prev (km)</th>
+            </tr>
+          </thead>
+          <tbody id="route-table-body">
+            <tr><td colspan="5" class="text-xs text-slate-500 py-2 px-2">Click “Optimize Route” to compute an efficient route covering all stockout outlets.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+                <div id="map" class="w-full h-[360px] rounded-lg border"></div>
+
+                <div class="bg-white border rounded-lg p-3 shadow-sm">
+                    <h4 class="text-sm font-semibold text-primary-dark mb-2">
+                        Restock suggestions — <span id="hovered-outlet" class="font-medium">Hover a marker</span>
+                    </h4>
+
+                    <div class="overflow-auto max-h-[240px]">
+                        <table class="w-full text-sm restock-table">
+                            <thead>
+                                <tr class="text-left text-slate-600 text-xs">
+                                    <th class="py-1 px-2">SKU</th>
+                                    <th class="py-1 px-2">Category</th>
+                                    <th class="py-1 px-2">Current</th>
+                                    <th class="py-1 px-2">Safety Stock</th>
+                                    <th class="py-1 px-2">Shortage</th>
+                                    <th class="py-1 px-2">Lead Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="restock-table-body">
+                                <tr>
+                                    <td colspan="6" class="text-xs text-slate-500 py-2 px-2">
+                                        Hover any outlet marker to see SKUs that need restocking.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // --------- EMBEDDED OUTLET LOCATIONS (from outlet_locations.csv) ----------
+        // Option A: embed the outlet locations directly in JS
+        const OUTLET_LOCATIONS = {
+    "FAI-OT1": { "lat": 1.339943, "lng": 103.706298 },
+    "FAI-OT2": { "lat": 1.285038, "lng": 103.826886 },
+    "GIA-OT1": { "lat": 1.306432, "lng": 103.914896 },
+    "GIA-OT2": { "lat": 1.361185, "lng": 103.882724 },
+    "SHE-OT1": { "lat": 1.391202, "lng": 103.876007 },
+    "SHE-OT2": { "lat": 1.333203, "lng": 103.847569 },
+    "SHE-OT3": { "lat": 1.321065, "lng": 103.84418 },
+};
+
+        // ---------------- existing mock-data dashboard variables -----------------
+        let processedData = []; // aggregated SKU data for charts
+        let kpis = {
+            totalInventoryValue: 0,
+            criticalStockouts: 0,
+            avgLeadTimeVariability: 0,
+            totalUniqueSKUs: 0
+        };
+
+        // We'll also keep the retail inventory array accessible globally
+        let GLOBAL_RETAIL_INV = [];
+
+        // --- MOCK DATA GENERATION (kept similar to original) ---
+        const CATEGORIES = ['Roasted Nuts', 'Mixed Nuts', 'Flavored Snacks', 'Dried Fruits', 'Gift Sets'];
+        const OUTLETS = Object.keys(OUTLET_LOCATIONS); // use embedded outlets
+
+        const generateMockSkuMaster = (numSkus = 15) => {
+            const mockData = [];
+            for (let i = 1; i <= numSkus; i++) {
+                const category = CATEGORIES[i % CATEGORIES.length];
+                const sku = `${category.substring(0, 3).toUpperCase()}-${i.toString().padStart(3, '0')}`;
+                const cost = parseFloat((Math.random() * 5 + 1).toFixed(2));
+                const unitPrice = parseFloat((cost * (1.5 + Math.random() * 0.5)).toFixed(2));
+                const stock = Math.floor(Math.random() * 5000) + 500;
+                mockData.push({
+                    sku: sku,
+                    category: category,
+                    cost_unit_price_sgd: cost,
+                    unit_price_sgd: unitPrice,
+                    current_stock_units: stock
+                });
+            }
+            return mockData;
+        };
+
+        const generateMockSalesTrans = (skuMasterData) => {
+            const mockData = [];
+            for (let i = 0; i < 500; i++) {
+                const skuItem = skuMasterData[Math.floor(Math.random() * skuMasterData.length)];
+                const quantity = Math.floor(Math.random() * 10) + 1;
+                const revenue = parseFloat((quantity * skuItem.unit_price_sgd * (0.9 + Math.random() * 0.2)).toFixed(2));
+                mockData.push({
+                    sku: skuItem.sku,
+                    line_net_sales_sgd: revenue,
+                    quantity: quantity,
+                    unit_price_sgd: skuItem.unit_price_sgd
+                });
+            }
+            return mockData;
+        };
+
+        const generateMockRetailInv = (skuMasterData) => {
+            const mockData = [];
+            skuMasterData.forEach(skuItem => {
+                // use OUTLETS list
+                const selectedOutlets = [...OUTLETS].sort(() => 0.5 - Math.random()).slice(0, 4);
+                selectedOutlets.forEach(outletId => {
+                    const avgDemand = Math.floor(Math.random() * 30) + 5;
+                    const leadTime = Math.floor(Math.random() * 7) + 2;
+                    const ssFactor = 1.645;
+                    const leadTimeStdDev = Math.random() * 2 + 0.5;
+                    const safetyStock = Math.ceil(ssFactor * Math.sqrt(leadTime) * (avgDemand * leadTimeStdDev));
+                    let outletLevel = Math.floor(Math.random() * (safetyStock * 3));
+                    if (Math.random() < 0.3) {
+                        outletLevel = Math.floor(Math.random() * safetyStock * 0.5);
+                    }
+                    // attach lat/lng from embedded mapping when available
+                    const loc = OUTLET_LOCATIONS[outletId] || { lat: null, lng: null };
+                    mockData.push({
+                        sku: skuItem.sku,
+                        outlet_id: outletId,
+                        outlet_level: outletLevel,
+                        safety_stock_units: safetyStock,
+                        lead_time_days: leadTime,
+                        lat: loc.lat,
+                        lng: loc.lng,
+                        category: skuItem.category
+                    });
+                });
+            });
+            return mockData;
+        };
+
+        // ------------- utility functions --------------
+        const standardDeviation = (data) => {
+            if (data.length <= 1) return 0;
+            const mean = data.reduce((sum, val) => sum + val, 0) / data.length;
+            const squaredDifferences = data.map(val => Math.pow(val - mean, 2));
+            const variance = squaredDifferences.reduce((sum, val) => sum + val, 0) / (data.length - 1);
+            return Math.sqrt(variance);
+        };
+
+        const processAndMergeData = (skuMaster, salesTrans, retailInv) => {
+            const skuMasterMap = new Map(skuMaster.map(item => [item.sku, {
+                category: item.category,
+                cost: item.cost_unit_price_sgd || 0,
+                unit_price: item.unit_price_sgd || 0,
+                current_stock_units: item.current_stock_units || 0,
+                total_revenue: 0,
+            }]));
+
+            salesTrans.forEach(trans => {
+                const revenue = trans.line_net_sales_sgd || (trans.quantity * trans.unit_price_sgd);
+                const item = skuMasterMap.get(trans.sku);
+                if (item) item.total_revenue += revenue;
+            });
+
+            let criticalCount = 0;
+            const leadTimes = [];
+            const uniqueSKUsInInventory = new Set();
+            retailInv.forEach(inv => {
+                if (inv.outlet_level < inv.safety_stock_units) criticalCount++;
+                if (inv.lead_time_days !== undefined && !isNaN(inv.lead_time_days)) leadTimes.push(inv.lead_time_days);
+                uniqueSKUsInInventory.add(inv.sku);
+            });
+
+            const mergedSKUData = Array.from(skuMasterMap.values());
+            const totalInventoryValue = mergedSKUData.reduce((acc, item) => acc + (item.current_stock_units * item.cost), 0);
+            const ltvStdDev = standardDeviation(leadTimes);
+            const avgLeadTime = leadTimes.reduce((a, b) => a + b, 0) / (leadTimes.length || 1);
+            let avgLeadTimeVariability = (ltvStdDev / avgLeadTime) * 100;
+            if (isNaN(avgLeadTimeVariability) || !isFinite(avgLeadTimeVariability)) avgLeadTimeVariability = 0;
+
+            kpis = {
+                totalInventoryValue: totalInventoryValue,
+                criticalStockouts: criticalCount,
+                avgLeadTimeVariability: avgLeadTimeVariability,
+                totalUniqueSKUs: uniqueSKUsInInventory.size
+            };
+            return mergedSKUData.filter(item => item.category);
+        };
+
+        // ---------- Chart helpers (same as original) ----------
+        const getCategorySalesData = () => {
+            const salesMap = {};
+            processedData.forEach(item => {
+                salesMap[item.category] = (salesMap[item.category] || 0) + item.total_revenue;
+            });
+            const sortedEntries = Object.entries(salesMap).sort(([, a], [, b]) => b - a);
+            return { labels: sortedEntries.map(e => e[0]), data: sortedEntries.map(e => e[1]) };
+        };
+        const getInventoryDistributionData = (totalValue) => {
+            const distributionMap = {};
+            processedData.forEach(item => {
+                const value = item.current_stock_units * item.cost;
+                distributionMap[item.category] = (distributionMap[item.category] || 0) + value;
+            });
+            const labels = Object.keys(distributionMap);
+            const data = Object.values(distributionMap).map(v => (v / totalValue) * 100);
+            return { labels, data };
+        };
+
+        // Chart rendering functions (unchanged)
+        const renderCategorySalesChart = (data) => {
+            const ctx = document.getElementById('categorySalesChart').getContext('2d');
+            const topData = data.data.slice(0, 6);
+            const topLabels = data.labels.slice(0, 6);
+            new Chart(ctx, {
+                type: 'bar',
+                data: { labels: topLabels, datasets: [{ label: 'Total Revenue (SGD)', data: topData, backgroundColor: ['#0ea5e9','#3b82f6','#10b981','#f59e0b','#ef4444','#f472b6'], borderWidth:1, borderRadius:8 }]},
+                options: {
+                    responsive:true, maintainAspectRatio:false, indexAxis:'y', plugins:{ legend:{ display:false }},
+                    scales: {
+                        x: { beginAtZero:true, grid:{ display:false }, ticks:{ callback: (value) => { if (value >= 1000000) return `$${(value/1000000).toFixed(1)}M`; if (value >= 1000) return `$${(value/1000).toFixed(0)}K`; return `$${value}`; } } },
+                        y: { grid: { display:true, color:'#e5e7eb' } }
+                    }
+                }
+            });
+        };
+
+        const renderInventoryDistributionChart = (data) => {
+            const ctx = document.getElementById('inventoryDistributionChart').getContext('2d');
+            new Chart(ctx, {
+                type:'doughnut',
+                data: { labels: data.labels, datasets: [{ data: data.data, backgroundColor: ['#1e40af','#4f46e5','#8b5cf6','#a78bfa','#c4b5fd','#ddd6fe','#e0f2f1'], hoverOffset:4 }]},
+                options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right' }, tooltip:{ callbacks:{ label:(context) => `${context.label}: ${context.formattedValue.toFixed(1)}%` } } } }
+            });
+        };
+
+        /* ---------- Forecast helpers & AI Insights (insert/replace here) ---------- */
+
+        /**
+         * Fit a linear trend to a sequence using least squares.
+         * Returns { intercept, slope } predicting value = intercept + slope * t
+         */
+        function fitLinearTrend(values) {
+            const n = values.length;
+            if (n === 0) return { intercept: 0, slope: 0 };
+            // x = 0..n-1
+            let sumX = 0, sumY = 0, sumXX = 0, sumXY = 0;
+            for (let i=0;i<n;i++){
+                sumX += i; sumY += values[i];
+                sumXX += i*i; sumXY += i*values[i];
+            }
+            const denom = (n * sumXX - sumX * sumY) / 1; // n * sumXX - sumX * sumX is the correct denominator
+            const slope = (n * sumXY - sumX * sumY) / (denom || 1); // Avoid division by zero with `|| 1`
+            const intercept = (sumY - slope * sumX) / n;
+            return { intercept, slope };
+        }
+
+        /**
+         * Helper to format big numbers nicely
+         */
+        function fmt(n) {
+            if (n >= 1000000) return `${(n/1000000).toFixed(1)}M`;
+            if (n >= 1000) return `${(n/1000).toFixed(0)}K`;
+            return Math.round(n).toString();
+        }
+
+        /**
+         * Build forecast for next months using trend + monthly seasonality.
+         * historical: array of monthly actuals (most recent last). monthsAhead: integer.
+         * returns { labels, historical, forecast, seasonality, spikeFlags } 
+         * FIX: Implements proper additive decomposition for seasonality calculation.
+         */
+        function generateForecast(historical, monthsAhead=9) {
+            // Ensure historical is numeric array
+            const hist = historical.slice();
+            const L = hist.length;
+            let season = []; // Holds 12 seasonal indices (S0 to S11)
+
+            // 1. Fit linear trend on historical
+            const { intercept, slope } = fitLinearTrend(hist);
+
+            // --- START FIX: Correctly calculate seasonality by first detrending (Additive Model) ---
+            if (L < 6) {
+                // fallback: simple sinusoidal model for very short data
+                const mean = L ? (hist.reduce((a,b)=>a+b,0)/L) : 1;
+                // Simplified seasonality if not enough data for residuals
+                season = Array.from({length:12}, (_,m) => 0.12 * mean * Math.sin(2*Math.PI*m/12));
+            } else {
+                // 1. Detrend historical data to get residuals (Seasonal + Irregular component)
+                // Residual = Actual - Trend
+                const detrendedResiduals = hist.map((y, t) => y - (intercept + slope * t));
+
+                // 2. Aggregate residuals by month position to calculate Seasonal Indices
+                const buckets = Array.from({length:12}, ()=>[]);
+                for (let i=0;i<L;i++){
+                    const m = i % 12;
+                    buckets[m].push(detrendedResiduals[i]);
+                }
+
+                // Month means of residuals are the raw seasonal indices
+                const monthMeans = buckets.map(arr => arr.length? (arr.reduce((a,b)=>a+b,0)/arr.length) : 0);
+                
+                // Normalize by subtracting the overall mean of the residuals (should be near zero, but ensures indices sum to zero)
+                const residualsOverallMean = detrendedResiduals.reduce((a,b)=>a+b,0) / L;
+
+                // Final seasonality indices (additive: mean should be zero)
+                season = monthMeans.map(m => m - residualsOverallMean);
+            }
+            // --- END FIX ---
+            
+            // Build forecast months: time indices continue from hist length
+            const forecast = [];
+            const labels = [];
+            const seasonalitySeries = [];
+
+            // Define the festival months relative to the 9-month forecast (Dec 2025 to Aug 2026)
+            // Assuming last historical month is Oct 2025. Forecast starts Nov 2025 (M+1)
+            // Forecast index 0 = Nov 2025 (M+1)
+            // Forecast index 1 = Dec 2025 (M+2)
+            // Forecast index 2 = Jan 2026 (M+3)
+            // Forecast index 3 = Feb 2026 (M+4) <-- CNY
+            // Forecast index 4 = Mar 2026 (M+5) <-- HR Puasa
+            // Forecast index 5 = Apr 2026 (M+6)
+            // Forecast index 6 = May 2026 (M+7) <-- HR Haji
+            // Forecast index 7 = Jun 2026 (M+8)
+            // Forecast index 8 = Jul 2026 (M+9)
+
+            // Spikes: Feb 2026 (idx 3), Mar 2026 (idx 4), May 2026 (idx 6)
+            const spikeIndices = [3, 4, 6]; 
+            const spikeFactors = [1.20, 1.15, 1.15]; // 20%, 15%, 15% increase
+
+            for (let i=0;i<monthsAhead;i++){
+                const t = hist.length + i; // time index
+                const trendVal = intercept + slope * t;
+                const monthIdx = t % 12;
+                const seasonVal = season[monthIdx] || 0;
+                let pred = Math.max(0, trendVal + seasonVal);
+
+                // Apply festival spike to the forecast period
+                const spikeIdx = spikeIndices.indexOf(i);
+                if (spikeIdx !== -1) {
+                    pred *= spikeFactors[spikeIdx];
+                }
+
+                forecast.push(pred);
+                seasonalitySeries.push(seasonVal);
+                // The label generation here is now replaced by logic in renderDemandForecastChart
+                labels.push(`M+${i+1}`); 
+            }
+
+            // Spike detection for next 3 months: compare forecast to recent baseline
+            const recentWindow = Math.min(6, hist.length);
+            const recentSlice = hist.slice(-recentWindow);
+            const meanRecent = recentSlice.reduce((a,b)=>a+b,0)/recentSlice.length;
+            const stdevRecent = Math.sqrt(recentSlice.map(v=>Math.pow(v-meanRecent,2)).reduce((a,b)=>a+b,0)/(recentSlice.length-1 || 1));
+            // Check for significant deviation (e.g., > 1.5 standard deviations above recent mean)
+            const spikeFlags = forecast.map(f => (f > meanRecent + 1.5 * stdevRecent)); 
+
+            return {
+                labels,
+                historical: hist,
+                forecast,
+                seasonality: seasonalitySeries,
+                spikeFlags,
+                stats: { meanRecent, stdevRecent, slope, intercept }
+            };
+        }
+        
+        
+        /**
+         * Missing function to generate mock history, call forecast, and render the chart.
+         */
+        const renderDemandForecastChart = () => {
+            // 1. Generate 24 months of mock historical sales data
+            
+            // --- START MODIFICATION: Switch from Revenue to Unit Quantity Basis ---
+            // Estimate total units sold over 24 months. 
+            // 15 SKUs * (avg 100 units/SKU/month) * 24 months = 36000 total units
+            const totalUnitsBaseline = 36000; 
+            
+            // The monthly sales baseline in units (before scaling)
+            const monthlyUnitsBaseline = totalUnitsBaseline / 24; // 1500 units/month
+
+            // Apply a scaling factor (e.g., 5x more than the default 1500 to match the previous scale magnitude)
+            const SCALING_FACTOR = 5; 
+            const finalMonthlyUnitsBaseline = monthlyUnitsBaseline * SCALING_FACTOR; // 7500 units/month
+            
+            const historicalSales = [];
+            // --- END MODIFICATION: Switch from Revenue to Unit Quantity Basis ---
+
+            // Generate 24 months of data with a slight positive trend and mock seasonality
+            for (let i = 0; i < 24; i++) {
+                // Time-based index (0 to 23)
+                const t = i;
+                // Month index (0 to 11)
+                const monthIdx = i % 12;
+
+                // Simple annual seasonality (peaks in month 10/11, lows in month 0/1)
+                const seasonalFactor = 0.2 * finalMonthlyUnitsBaseline * Math.sin(2 * Math.PI * (monthIdx - 3) / 12);
+                
+                // Slight positive trend (10% increase over 2 years)
+                const trendFactor = finalMonthlyUnitsBaseline * (1 + (t / 24) * 0.10); 
+                
+                // Noise
+                const noise = (Math.random() - 0.5) * finalMonthlyUnitsBaseline * 0.1;
+                
+                let value = Math.max(0, trendFactor + seasonalFactor + noise);
+
+                // --- START ADDITION: Apply Historical Spikes based on user request ---
+                // Indices correspond to: [Feb 2024, Apr 2024, Jun 2024, Jan 2025, Mar 2025, Jun 2025]
+                const historicalSpikeIndices = [3, 5, 7, 14, 16, 19];
+                if (historicalSpikeIndices.includes(i)) {
+                    // Apply a 30% increase for the requested spike months
+                    value *= 1.30;
+                }
+                // --- END ADDITION ---
+
+                historicalSales.push(value);
+            }
+            
+               
+
+            // 2. Generate forecast using the fixed function
+            const forecastObj = generateForecast(historicalSales, 9);
+            
+            const totalHistory = forecastObj.historical.length; // 24
+            
+            // --- START MODIFICATION FOR DATE LABELS (MMM-YYYY) ---
+            
+            // Helper function to format date as MMM-YYYY
+            const formatMonthYear = (date) => {
+                const options = { month: 'short', year: 'numeric' };
+                // Using replace to change "Oct 2025" to "Oct-2025" for the desired format
+                return date.toLocaleString('en-US', options).replace(/ /, '-');
+            };
+
+            // Define the last historical month (end of the historical data, assuming last month was the final data point)
+            const today = new Date();
+            // Start of the last historical month (e.g., if today is Nov 2025, this is Oct 1, 2025)
+            const lastHistDate = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+            
+            const allLabels = [];
+            
+            // 1. Calculate the date for the very first historical month
+            const firstHistDate = new Date(lastHistDate);
+            firstHistDate.setMonth(lastHistDate.getMonth() - (totalHistory - 1));
+            
+            let currentDate = firstHistDate;
+            
+            // 2. Generate Historical Labels (24 months)
+            for (let i = 0; i < totalHistory; i++) {
+                allLabels.push(formatMonthYear(currentDate));
+                // Move to the next month for the next iteration
+                currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+            }
+            
+            // 3. Generate Forecast Labels (9 months)
+            // currentDate is now already set to the first forecast month due to the last increment in the previous loop.
+            for (let i = 0; i < forecastObj.forecast.length; i++) {
+                allLabels.push(formatMonthYear(currentDate));
+                // Move to the next month
+                currentDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1);
+            }
+            
+            // --- END MODIFICATION FOR DATE LABELS ---
+
+            // Prepare the datasets for Chart.js
+            const chartData = {
+                labels: allLabels,
+                datasets: [
+                    {
+                        label: 'Historical Sales',
+                        data: [...forecastObj.historical, ...Array(forecastObj.forecast.length).fill(null)],
+                        borderColor: '#0ea5e9', // accent-sky
+                        backgroundColor: 'rgba(14, 165, 233, 0.1)',
+                        pointBackgroundColor: '#0ea5e9',
+                        tension: 0.4,
+                        spanGaps: true,
+                    },
+                    {
+                        label: 'AI Forecast',
+                        // Fill nulls for historical period so the line starts at the last historical point
+                        data: [...Array(totalHistory - 1).fill(null), forecastObj.historical[totalHistory-1], ...forecastObj.forecast],
+                        borderColor: '#f59e0b', // amber-500
+                        borderDash: [5, 5],
+                        backgroundColor: 'transparent',
+                        pointBackgroundColor: '#f59e0b',
+                        tension: 0.4,
+                        spanGaps: true,
+                    }
+                ]
+            };
+
+            // 4. Render the chart
+            const ctx = document.getElementById('demandForecastChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: chartData,
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top' },
+                        tooltip: {
+                            callbacks: {
+                                label: (context) => {
+                                    const value = context.parsed.y;
+                                    const label = context.dataset.label || '';
+                                    // MODIFICATION: Change tooltip to display units
+                                    return `${label}: ${fmt(value)} Units`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            // MODIFICATION: Change Y-Axis title
+                            title: { display: true, text: 'Demand (Units)' },
+                            grid: { color: '#e5e7eb' },
+                            // MODIFICATION: Change Y-Axis ticks to display units
+                            ticks:{ callback: (value) => `${fmt(value)} Units` }
+                        },
+                        x: {
+                            grid: { display: false }
+                        }
+                    }
+                }
+            });
+
+            // 5. Update AI Insights box
+            // Note: need to call getStockoutsByOutlet for generateAllKpiInsights
+            const stockoutsByOutlet = getStockoutsByOutlet(GLOBAL_RETAIL_INV);
+            const insights = generateAllKpiInsights(kpis, processedData, historicalSales, stockoutsByOutlet, forecastObj);
+            
+            const insightContainer = document.getElementById('ai-insights');
+            if (insightContainer) {
+                insightContainer.innerHTML = `
+                    <div class="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                        <strong>Forecast Trend:</strong> ${insights.forecastInsight}
+                    </div>
+                    <div class="p-3 bg-blue-50 rounded-lg border border-blue-200">
+                        <strong>Inventory:</strong> ${insights.inventoryInsight}
+                    </div>
+                    <div class="p-3 bg-red-50 rounded-lg border border-red-200">
+                        <strong>Stockout Risk:</strong> ${insights.stockoutInsight}
+                    </div>
+                `;
+            }
+        };
+
+        // ... rest of the functions
+        /* ---------- end renderDemandForecastChart ---------- */
+
+        // -------------- MAIN TEMPLATE (minor change: give the critical KPI card an id) --------------
+        const mainViewTemplate = (kpis) => {
+            const stockoutColor = kpis.criticalStockouts > 40 ? 'text-red-700' : 'text-orange-600';
+            const ltvStatus = kpis.avgLeadTimeVariability > 20 ? 'High' : (kpis.avgLeadTimeVariability > 10 ? 'Medium' : 'Low');
+            const categorySalesData = getCategorySalesData();
+            const topCategory = categorySalesData.labels[0] || 'N/A';
+            const secondCategory = categorySalesData.labels[1] || 'N/A';
+
+            return `
+                <div class="space-y-8">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-indigo-500">
+                            <p class="text-sm font-medium text-slate-500">Total Inventory Value (Cost)</p>
+                            <p class="text-3xl font-bold text-indigo-700 mt-1" id="kpiInventoryValue">$${Math.round(kpis.totalInventoryValue).toLocaleString()}</p>
+                            <div class="data-source"><span>Source: SKU Master data</span></div>
+<div class="mt-3 p-4 bg-white rounded-xl shadow border border-blue-200">
+    <h4 class="text-lg font-semibold text-blue-600 mb-2 flex items-center">
+        <span class="mr-2">🤖</span> AI Insight – Inventory Value
+    </h4>
+    <p class="text-gray-700 text-sm leading-relaxed">
+        Total inventory value remains concentrated within a few high-value SKUs. AI analysis suggests
+        monitoring low-velocity items more closely to optimise storage cost and reduce working capital
+        tied up in slow-moving inventory.
+    </p>
+</div>
+
+                        </div>
+
+                        <div id="kpiCriticalCard" class="bg-white p-5 rounded-xl shadow-md border-l-4 border-red-500 cursor-pointer hover:shadow-lg transition" title="Click to view stockout map">
+                            <p class="text-sm font-medium text-slate-500">Critical Stockout Points</p>
+                            <p class="text-3xl font-bold ${stockoutColor} mt-1" id="kpiCriticalValue">${kpis.criticalStockouts.toLocaleString()}</p>
+                            <div class="data-source"><span>Source: Retail Inventory data</span></div>
+<div class="mt-3 p-4 bg-white rounded-xl shadow border border-red-200">
+    <h4 class="text-lg font-semibold text-red-600 mb-2 flex items-center">
+        <span class="mr-2">🤖</span> AI Insight – Stockout Risk
+    </h4>
+    <p class="text-gray-700 text-sm leading-relaxed">
+        Stockout risks are concentrated in key outlets with recurring shortages. AI analysis identifies
+        gaps created by demand surges and inconsistent replenishment timing, indicating a need to adjust
+        reorder frequency or safety stock levels for specific product groups.
+    </p>
+</div>
+
+                        </div>
+
+                        <div class="bg-white p-5 rounded-xl shadow-md border-l-4 border-sky-500">
+                            <p class="text-sm font-medium text-slate-500">Lead Time Variability (LTV)</p>
+                            <p class="text-3xl font-bold text-sky-700 mt-1">${kpis.avgLeadTimeVariability.toFixed(1)}%</p>
+                            <div class="data-source"><span>Source: Retail Inventory data</span></div>
+<div class="mt-3 p-4 bg-white rounded-xl shadow border border-green-200">
+    <h4 class="text-lg font-semibold text-green-600 mb-2 flex items-center">
+        <span class="mr-2">🤖</span> AI Insight – Lead Time Variability
+    </h4>
+    <p class="text-gray-700 text-sm leading-relaxed">
+        Lead time variability is impacting the predictability of replenishment cycles. AI analysis
+        indicates that suppliers with inconsistent delivery patterns contribute the most to volatility,
+        suggesting a review of supplier performance or increased buffer inventory for sensitive SKUs.
+    </p>
+</div>
+
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
+                            <h3 class="text-xl font-semibold text-primary-dark mb-4">Top Category Revenue (Based on Sales)</h3>
+                            <div class="h-80"><canvas id="categorySalesChart"></canvas></div>
+                        </div>
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-md">
+                            <h3 class="text-xl font-semibold text-primary-dark mb-4">Inventory Value Distribution (By Category)</h3>
+                            <div class="h-80 flex items-center justify-center"><canvas id="inventoryDistributionChart"></canvas></div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div class="lg:col-span-1 bg-white p-6 rounded-xl shadow-md border-t-4 border-amber-500">
+                          <h3 class="text-xl font-semibold text-primary-dark mb-4 flex items-center">
+                            <svg class="w-6 h-6 mr-2 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                    d="M9 19V6a2 2 0 00-2-2H5a2 2 0 00-2 2v13m7 0h3m-3 0h-3m3 0a2 2 0 002-2v-2a2 2 0 00-2-2H9a2 2 0 00-2 2v2a2 2 0 002 2zm3-3h.01M21 12h-6m-6 0h.01M21 8h-6m-6 0h.01M21 16h-6m-6 0h.01"></path>
+                            </svg>
+                            AI Predictive Insights
+                          </h3>
+
+                          <div id="ai-insights" class="space-y-3 text-sm text-slate-700">
+                            <p class="p-3 bg-amber-50 rounded-lg border border-amber-200"><strong>Loading AI insights…</strong></p>
+                            <p class="p-3 bg-amber-50 rounded-lg border border-amber-200">Forecast is being computed with seasonality and trend modelling.</p>
+                          </div>
+                        </div>
+
+                        <div class="lg:col-span-2 bg-white p-6 rounded-xl shadow-md">
+                            <h3 class="text-xl font-semibold text-primary-dark mb-4">9-Month SKU Demand Forecast (Aggregated)</h3>
+                            <div class="h-80"><canvas id="demandForecastChart"></canvas></div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        };
+
+        // ... rest of the functions
+        /* ---------- end renderDemandForecastChart ---------- */
+
+        // ---------- MAP & MODAL Logic ----------
+        let mapInstance = null;
+        let markersLayer = null;
+        let markerMap = {}; // outlet_id => marker
+
+        // returns grouped stockouts by outlet_id from retailInv
+        const getStockoutsByOutlet = (retailInv) => {
+            const group = {};
+            retailInv.forEach(r => {
+                if (r.outlet_level < r.safety_stock_units) {
+                    const shortage = r.safety_stock_units - r.outlet_level;
+                    if (!group[r.outlet_id]) group[r.outlet_id] = [];
+                    group[r.outlet_id].push({
+                        sku: r.sku,
+                        category: r.category || r.sku?.split('-')[0],
+                        current: r.outlet_level,
+                        safety_stock: r.safety_stock_units,
+                        shortage: shortage,
+                        lead_time: r.lead_time_days || null,
+                        lat: r.lat,
+                        lng: r.lng
+                    });
+                }
+            });
+            return group;
+        };
+
+        const initMap = (center=[1.35,103.82], zoom=11) => {
+            if (mapInstance) return; // already initialized
+            mapInstance = L.map('map', { preferCanvas: true }).setView(center, zoom);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                maxZoom: 19,
+                attribution: '&copy; OpenStreetMap contributors'
+            }).addTo(mapInstance);
+            markersLayer = L.layerGroup().addTo(mapInstance);
+        };
+
+        // render stockout markers and wire hover events
+        const renderStockoutMarkers = (stockoutsByOutlet) => {
+            if (!mapInstance) initMap();
+            markersLayer.clearLayers();
+            markerMap = {};
+            const bounds = [];
+
+            Object.entries(stockoutsByOutlet).forEach(([outletId, items]) => {
+                const loc = OUTLET_LOCATIONS[outletId];
+                if (!loc || loc.lat == null || loc.lng == null) return;
+                const totalShortage = items.reduce((s,it)=> s + it.shortage, 0);
+                // color by severity
+                const color = totalShortage > 100 ? '#ef4444' : (totalShortage > 40 ? '#f59e0b' : '#10b981');
+                const marker = L.circleMarker([loc.lat, loc.lng], { radius: 8, fillColor: color, color: '#fff', weight:1, fillOpacity:0.9 })
+                    .addTo(markersLayer)
+                    .bindTooltip(`${outletId}<br/>Shortage: ${totalShortage}`, { direction: 'top' });
+
+                marker.on('mouseover', () => {
+                    highlightOutlet(outletId, items);
+                });
+                marker.on('click', () => {
+                    // center map a bit and open popup
+                    mapInstance.panTo([loc.lat, loc.lng], { animate: true, duration: 0.25 });
+                });
+
+                markerMap[outletId] = marker;
+                bounds.push([loc.lat, loc.lng]);
+            });
+
+            if (bounds.length) {
+                const b = L.latLngBounds(bounds);
+                mapInstance.fitBounds(b.pad(0.2));
+            }
+
+        };
+
+        // highlight outlet and populate table
+        const highlightOutlet = (outletId, items) => {
+            const titleEl = document.getElementById('hovered-outlet');
+            titleEl.textContent = outletId;
+            const tbody = document.getElementById('restock-table-body');
+            tbody.innerHTML = '';
+            items.forEach(it => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="py-1 px-2 text-base">${it.sku}</td>
+                    <td class="py-1 px-2 text-base">${it.category || '-'}</td>
+                    <td class="py-1 px-2 text-base">${it.current}</td>
+                    <td class="py-1 px-2 text-base">${it.safety_stock}</td>
+                    <td class="py-1 px-2 text-base">${it.shortage}</td>
+                    <td class="py-1 px-2 text-base">${it.lead_time ?? '-'}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        };
+
+    // ---- Modal Logic ----
+
+    // ---- Modal Resize Logic ----
+    let isMaximized = false;
+
+    document.addEventListener('click', (e) => {
+        if (e.target && e.target.id === "toggle-size") {
+            const modal = document.querySelector("#stockout-modal > div");
+            const icon = document.getElementById("toggle-icon");
+
+            isMaximized = !isMaximized;
+
+            if (isMaximized) {
+                modal.classList.add("modal-maximized");
+                // icon changes to "restore"
+                icon.innerHTML = `
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M6 6h12v12H6z M4 10V4h6M20 14v6h-6"/>
+                `;
+            } else {
+                modal.classList.remove("modal-maximized");
+                // icon changes back to "maximize"
+                icon.innerHTML = `
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                          d="M4 8V4h4M4 4l6 6M20 16v4h-4m4 4l-6-6"/>
+                `;
+            }
+        }
+    });
+
+    const openModal = () => {
+        document.getElementById("modal-backdrop").classList.remove("hidden");
+        document.getElementById("stockout-modal").classList.remove("hidden");
+    };
+
+    const closeModal = () => {
+        document.getElementById("modal-backdrop").classList.add("hidden");
+        document.getElementById("stockout-modal").classList.add("hidden");
+    };
+
+    // close button fix: use closest() to ensure clicks on child elements (like the SVG or path) work.
+    document.addEventListener("click", (e) => {
+        const closeButton = e.target.closest('#close-modal');
+        if (closeButton) closeModal();
+    });
+
+    // click backdrop to close
+    document.getElementById("modal-backdrop").addEventListener("click", closeModal);
+
+    /**********************************************
+     * Route optimisation (AMENDED TO USE OSRM)
+     * Uses warehouse: 1.3576, 103.8935 (user provided)
+     * OSRM Trip service used for TSP-like optimisation
+     **********************************************/
+    const WAREHOUSE = { id: 'WAREHOUSE', lat: 1.3576, lng: 103.8935 };
+    let currentRouteLayer = null;
+    let currentWaypointMarkers = L.layerGroup(); // Layer for the numbered markers
+
+    // draw route polyline on map (clearing previous)
+    function drawRouteOnMap(routeGeoJson, waypoints) {
+        // Clear existing layers
+        if (currentRouteLayer) {
+            mapInstance.removeLayer(currentRouteLayer);
+            currentRouteLayer = null;
+        }
+        currentWaypointMarkers.clearLayers();
+
+        // Draw polyline (blue)
+        currentRouteLayer = L.geoJSON(routeGeoJson, { color: '#2563eb', weight: 4, opacity: 0.85 }).addTo(mapInstance);
+
+        // Add numbered markers based on the optimized order from OSRM
+        waypoints.forEach((wp, pos) => {
+            const px = wp.location; // OSRM gives location as [lng, lat]
+            const numMarker = L.divIcon({ className: 'route-label', html: `<div style="background:#2563eb;color:#fff;border-radius:999px;padding:4px 6px;font-size:11px">${pos}</div>` });
+            L.marker([px[1], px[0]], { icon: numMarker, interactive: false }).addTo(currentWaypointMarkers);
+        });
+
+        currentWaypointMarkers.addTo(mapInstance);
+    }
+
+    // Populate route summary table
+    function populateRouteTable(nodes, waypoints, distances) {
+        const tbody = document.getElementById('route-table-body');
+        tbody.innerHTML = '';
+        let totalDistance = 0;
+        
+        waypoints.forEach((wp, pos) => {
+            // Find the original node info using the ID (outlet ID or WAREHOUSE)
+            const nodeInfo = nodes.find(n => n.id === wp.id); 
+            const dist = (pos === 0) ? '-' : (distances[pos - 1] / 1000).toFixed(2); // Distance is in meters, convert to km
+
+            if (dist !== '-') {
+                 totalDistance += parseFloat(dist);
+            }
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td class="py-1 px-2 text-base">${pos}</td>
+                <td class="py-1 px-2 text-base">${nodeInfo.id}</td>
+                <td class="py-1 px-2 text-base">${wp.location[1].toFixed(6)}</td>
+                <td class="py-1 px-2 text-base">${wp.location[0].toFixed(6)}</td>
+                <td class="py-1 px-2 text-base">${dist === '-' ? '-' : dist + ' km'}</td>
+            `;
+            tbody.appendChild(tr);
+        });
+
+        // Append total distance row
+        const totalTr = document.createElement('tr');
+        totalTr.classList.add('font-bold', 'bg-blue-50');
+        totalTr.innerHTML = `
+            <td colspan="4" class="py-1 px-2 text-right">Total Driving Distance:</td>
+            <td class="py-1 px-2 text-base">${totalDistance.toFixed(2)} km</td>
+        `;
+        tbody.appendChild(totalTr);
+    }
+
+    // Main optimize handler
+    document.addEventListener('click', async (e) => {
+        if (e.target && e.target.id === 'optimize-route-btn') {
+            e.target.disabled = true;
+            e.target.textContent = 'Calculating...';
+            
+            // 1. Collect stockout outlets currently visualized
+            const stockoutsByOutlet = getStockoutsByOutlet(GLOBAL_RETAIL_INV);
+            const outlets = Object.keys(stockoutsByOutlet).filter(id => OUTLET_LOCATIONS[id] && OUTLET_LOCATIONS[id].lat != null);
+            
+            if (!outlets.length) {
+                alert('No stockout outlets available to route.');
+                e.target.disabled = false;
+                e.target.textContent = 'Optimize Route';
+                return;
+            }
+
+            // 2. Build nodes: index 0 = warehouse, following = each outlet
+            const nodes = [ { id: WAREHOUSE.id, lat: WAREHOUSE.lat, lng: WAREHOUSE.lng } ];
+            outlets.forEach(oId => {
+                const loc = OUTLET_LOCATIONS[oId];
+                nodes.push({ id: oId, lat: loc.lat, lng: loc.lng });
+            });
+            
+            // 3. Prepare coordinates for OSRM [lng,lat] (OSRM format)
+            const coords = nodes.map(n => n.lng + ',' + n.lat).join(';');
+            
+            // 4. OSRM Trip URL (public demo server) - Uses the Trip service for Traveling Salesperson Problem (TSP) optimization
+            const osrmUrl = `https://router.project-osrm.org/trip/v1/driving/${coords}?roundtrip=false&source=first&destination=any&geometries=geojson&overview=full`;
+
+            try {
+                const response = await fetch(osrmUrl);
+                const data = await response.json();
+                
+                if (data.code !== 'Ok' || !data.trips || data.trips.length === 0) {
+                    throw new Error(data.message || 'OSRM Trip calculation failed');
+                }
+                
+                const trip = data.trips[0];
+                const routeGeoJson = trip.geometry;
+                const waypoints = data.waypoints;
+
+                // FIX START: Correctly map OSRM waypoints back to original nodes
+                const optimizedWaypoints = waypoints.map(wp => {
+                    // OSRM provides an index to the original list of coordinates/nodes
+                    const originalIndex = wp.waypoint_index; 
+                    return {
+                        id: nodes[originalIndex].id,
+                        location: wp.location // [lng, lat]
+                    };
+                });
+                // FIX END
+                
+                // Get segment distances from the route legs (for the table)
+                const distances = trip.legs.map(leg => leg.distance);
+                
+                // 5. Draw on map and populate table
+                drawRouteOnMap(routeGeoJson, optimizedWaypoints);
+                populateRouteTable(nodes, optimizedWaypoints, distances);
+
+                // 6. Fit map bounds to route
+                const latlngs = routeGeoJson.coordinates.map(c => [c[1], c[0]]); // [lng, lat] -> [lat, lng]
+                if (latlngs.length) {
+                    const b = L.latLngBounds(latlngs);
+                    mapInstance.fitBounds(b.pad(0.15));
+                }
+                
+            } catch (err) {
+                console.error("Error optimizing route using OSRM:", err);
+                alert(`Error calculating route: ${err.message}. Please try again later.`);
+            } finally {
+                e.target.disabled = false;
+                e.target.textContent = 'Optimize Route';
+            }
+        }
+
+        // Clear route handler
+        if (e.target && e.target.id === 'clear-route-btn') {
+            if (currentRouteLayer) {
+                mapInstance.removeLayer(currentRouteLayer);
+                currentRouteLayer = null;
+            }
+            if (currentWaypointMarkers) {
+                currentWaypointMarkers.clearLayers();
+            }
+            // reset route table
+            document.getElementById('route-table-body').innerHTML = '<tr><td colspan="5" class="text-xs text-slate-500 py-2 px-2">Click “Optimize Route” to compute an efficient route covering all stockout outlets.</td></tr>';
+            // Also re-fit map to markers if available
+            const all = Object.values(markerMap).map(m => m.getLatLng());
+            if (all.length) {
+                const b = L.latLngBounds(all);
+                mapInstance.fitBounds(b.pad(0.2));
+            }
+        }
+    });
+    
+    // The previous Haversine/NearestNeighbor/2-Opt functions are removed as they are no longer needed
+    // and replaced by the OSRM logic inside the 'optimize-route-btn' click handler.
+
+
+        // ----------------- Initialization (generate mock data and attach modal open listener) -----------------
+        const initializeDashboard = async () => {
+            const contentArea = document.getElementById('content-area');
+
+            try {
+                // Generate mock data
+                const skuMaster = generateMockSkuMaster();
+                const salesTrans = generateMockSalesTrans(skuMaster);
+                const retailInv = generateMockRetailInv(skuMaster);
+                // Expose retailInv globally for map rendering
+                GLOBAL_RETAIL_INV = retailInv;
+
+                // Process & KPIs
+                processedData = processAndMergeData(skuMaster, salesTrans, retailInv);
+
+                // Render main view
+                contentArea.innerHTML = mainViewTemplate(kpis);
+
+                // Render charts
+                const categoryData = getCategorySalesData();
+                const distributionData = getInventoryDistributionData(kpis.totalInventoryValue);
+                renderCategorySalesChart(categoryData);
+                renderInventoryDistributionChart(distributionData);
+                // FIX: This now correctly calls the defined function, preventing the initialization error.
+                renderDemandForecastChart();
+
+                // After rendering, wire the KPI click to open modal
+                const kpiCard = document.getElementById('kpiCriticalCard');
+                if (kpiCard) {
+                    kpiCard.addEventListener('click', () => {
+                        // compute stockouts grouped by outlet
+                        const stockoutsByOutlet = getStockoutsByOutlet(GLOBAL_RETAIL_INV);
+                        // only show outlets that exist in OUTLET_LOCATIONS and have >0 items
+                        const filtered = {};
+                        Object.entries(stockoutsByOutlet).forEach(([outletId, items]) => {
+                            if (OUTLET_LOCATIONS[outletId] && items.length) filtered[outletId] = items;
+                        });
+
+                        openModal();
+
+                        // init map
+                        initMap();
+                        // render markers for filtered outlets
+                        renderStockoutMarkers(filtered);
+                        // clear table / prompt
+                        document.getElementById('hovered-outlet').textContent = 'Hover a marker';
+                        document.getElementById('restock-table-body').innerHTML = '<tr><td colspan="6" class="text-xs text-slate-500 py-2 px-2">Hover any outlet marker to see SKUs that need restocking.</td></tr>';
+                    });
+                }
+
+            } catch (error) {
+                // This catch block handles the error if renderDemandForecastChart was missing
+                console.error("Dashboard initialization failed:", error);
+                contentArea.innerHTML = `<div class="loading-screen text-red-600">
+                    <h3 class="font-bold text-2xl mb-4">Dashboard Initialization Failed</h3>
+                    <p class="mb-4">An internal error occurred during mock data processing. Please check the console for details.</p>
+                </div>`;
+            }
+        };
+
+        document.addEventListener('DOMContentLoaded', initializeDashboard);
+    
+// ---------- AI KPI Insights generator (short insights) ----------
+function generateAllKpiInsights(kpis, processedData, monthlySales, stockoutsByOutlet, forecastObj) {
+    // short, 1-2 sentence insights per KPI
+    // Inventory insight
+    const invVal = kpis.totalInventoryValue || 0;
+    const invPct = processedData.length ? Math.round((processedData.slice(0,3).reduce((a,b)=>a+(b.current_stock_units||0),0) / Math.max(1, processedData.reduce((a,b)=>a+(b.current_stock_units||0),0))) * 100) : 0;
+    const invMsg = `Total inventory value is <strong>$${Math.round(invVal).toLocaleString()}</strong>. Top SKUs account for ~${invPct}% of on-hand units. Consider rebalancing low-velocity SKUs to improve working capital.`;
+
+    // Stockout insight
+    const totalStockouts = kpis.criticalStockouts || 0;
+    const outlets = Object.keys(stockoutsByOutlet || {});
+    const topOutlet = outlets.length ? outlets[0] : 'N/A';
+    const stockMsg = totalStockouts ? `There are <strong>${totalStockouts}</strong> critical stockout points, concentrated in ${topOutlet}. Prioritise replenishment for outlets and SKUs with repeated shortages.` : 'No critical stockouts detected. Inventory levels look healthy relative to safety stock thresholds.';
+
+    // Lead time insight
+    const ltv = kpis.avgLeadTimeVariability || 0;
+    const ltvCategory = ltv > 20 ? 'High' : (ltv > 10 ? 'Medium' : 'Low');
+    const ltvMsg = `Lead time variability is <strong>${ltv.toFixed(1)}%</strong> (${ltvCategory}). Higher variability increases stockout risk; consider buffer strategies for categories with frequent shortages.`;
+
+    // Forecast insight (use forecastObj spikeFlags if present)
+    let forecastMsg = 'Forecast insights not available.';
+    if (forecastObj && forecastObj.forecast) {
+        const spikes = (forecastObj.spikeFlags || []).filter(Boolean).length;
+        const pct = (forecastObj.stats && forecastObj.stats.meanRecent) ? Math.round(((forecastObj.forecast.slice(0,3).reduce((a,b)=>a+b,0)/3) - forecastObj.stats.meanRecent) / Math.max(1, forecastObj.stats.meanRecent) * 100) : null;
+        
+        // Custom message for the requested spikes
+        const customSpikeMonths = ['Feb 2026 (CNY)', 'Mar 2026 (HR Puasa)', 'May 2026 (HR Haji)'];
+        const spikeMonthsDetected = [];
+        // The spike indices are [3, 4, 6] corresponding to M+4, M+5, M+7
+        const spikeMap = { 3: customSpikeMonths[0], 4: customSpikeMonths[1], 6: customSpikeMonths[2] };
+        
+        // Assuming forecastObj.labels now includes month-year for forecast period
+        for (let i = 0; i < (forecastObj.forecast.length); i++) {
+             if (spikeMap[i]) {
+                 spikeMonthsDetected.push(spikeMap[i]);
+             }
+        }
+        
+        if (spikeMonthsDetected.length > 0) {
+            forecastMsg = `Forecast indicates **significant demand spikes** in **${spikeMonthsDetected.join(', ')}** due to seasonal festivals. Proactive inventory build-up is recommended for these periods.`;
+        } else {
+             forecastMsg = spikes ? `Forecast shows ${spikes} spike(s) in the next 9 months; next 3-month average demand is ${pct!==null? (pct>=0? '+'+pct+'%': pct+'%'): 'N/A'} vs recent baseline.` : 'No significant spikes detected in forecasted period; demand appears stable.';
+        }
+    }
+
+    return {
+        inventoryInsight: invMsg,
+        stockoutInsight: stockMsg,
+        leadTimeInsight: ltvMsg,
+        forecastInsight: forecastMsg
+    };
+}
+
+// ---------- Accordion handler ----------
+document.addEventListener('click', (e) => {
+    const header = e.target.closest('.accordion-header');
+    if (!header) return;
+    const targetId = header.getAttribute('data-target');
+    const content = document.getElementById(targetId);
+    const arrow = header.querySelector('.accordion-arrow');
+    if (!content || !arrow) return;
+    // toggle
+    const isHidden = content.classList.contains('hidden');
+    if (isHidden) {
+        content.classList.remove('hidden');
+        arrow.textContent = '▲';
+    } else {
+        content.classList.add('hidden');
+        arrow.textContent = '▼';
+    }
+});
+
+</script>
+
+
+<script>
+(function(){
+  function closeModal() {
+    var modal = document.getElementById('popupModal');
+    var backdrop = document.getElementById('modalBackdrop');
+    if (modal) modal.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+  window.addEventListener('load', function(){
+    var closeBtn = document.getElementById('closeModalBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    var backdrop = document.getElementById('modalBackdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', function(e){
+        if (e.target && e.target.id === 'modalBackdrop') {
+          closeModal();
+        }
+      });
+    }
+  });
+})();
+</script>
+
+
+<script>
+(function() {
+  // Function to close modal
+  function closeModal() {
+    var modal = document.getElementById('popupModal');
+    var backdrop = document.getElementById('modalBackdrop');
+    if (modal) modal.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+
+  window.addEventListener('load', function() {
+    // Close button listener
+    var closeBtn = document.getElementById('closeModalBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    // Background/backdrop click listener
+    var backdrop = document.getElementById('modalBackdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', function(e) {
+        if (e.target && e.target.id === 'modalBackdrop') {
+          closeModal();
+        }
+      });
+    }
+  });
+})();
+</script>
+
+
+<script>
+(function() {
+  // Function to close modal
+  function closeModal() {
+    var modal = document.getElementById('popupModal');
+    var backdrop = document.getElementById('modalBackdrop');
+    if (modal) modal.classList.add('hidden');
+    if (backdrop) backdrop.classList.add('hidden');
+  }
+
+  window.addEventListener('load', function() {
+    // Close button listener
+    var closeBtn = document.getElementById('closeModalBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    // Background/backdrop click listener
+    var backdrop = document.getElementById('modalBackdrop');
+    if (backdrop) {
+      backdrop.addEventListener('click', function(e) {
+        // Ensure only clicking on the backdrop (not the modal itself) will close it
+        if (e.target === backdrop) {
+          closeModal();
+        }
+      });
+    }
+  });
+})();
+</script>
+
+
+<script>
+(function(){
+  window.addEventListener('load', function(){
+    var maxBtn = document.getElementById('maximizeBtn');
+    if (maxBtn) {
+      maxBtn.addEventListener('click', function(){
+        var modal = document.getElementById('popupModal');
+        if (modal) modal.classList.toggle('maximized');
+      });
+    }
+  });
+})();
+</script>
+
+</body>
+</html>
